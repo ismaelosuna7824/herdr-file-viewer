@@ -14,6 +14,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -166,7 +167,8 @@ func New(root string) (Model, error) {
 // Init kicks off the background file index, git status scan, and git log load.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(loadFilesCmd(m.root), loadGitStatusCmd(m.root),
-		loadGitLogCmd(m.root), loadBranchesCmd(m.root), loadChangesCmd(m.root))
+		loadGitLogCmd(m.root), loadBranchesCmd(m.root), loadChangesCmd(m.root),
+		tickCmd())
 }
 
 // --- commands ---------------------------------------------------------------
@@ -227,6 +229,23 @@ func (m *Model) runGitOp(fn func(context.Context, string) error) tea.Cmd {
 	m.log.branchErr = ""
 	root := m.root
 	return gitOpCmd(func() error { return fn(context.Background(), root) })
+}
+
+// autoRefreshInterval is how often the viewer polls disk/git for changes so new
+// files, edits and staging updates appear without a manual refresh.
+const autoRefreshInterval = 2 * time.Second
+
+type tickMsg struct{}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(autoRefreshInterval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// autoRefreshCmd reloads the cheap "what changed on disk" signals every tick:
+// git status, the staging list, and the file index. History and branches change
+// rarely, so they refresh on `r` and after git operations instead.
+func autoRefreshCmd(root string) tea.Cmd {
+	return tea.Batch(loadGitStatusCmd(root), loadChangesCmd(root), loadFilesCmd(root))
 }
 
 // reloadGitCmd re-scans status, history, branches, and the file index — used
@@ -323,6 +342,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case tickMsg:
+		// Live refresh: re-read the tree from disk and reload git/file signals,
+		// then schedule the next tick.
+		m.tree.Refresh()
+		return m, tea.Batch(autoRefreshCmd(m.root), tickCmd())
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -461,6 +486,7 @@ func (m Model) handleBrowseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.skind = kindContent
 		return m, tea.Batch(m.setFocus(focusSearch), m.triggerSearch())
 	case "r":
+		m.tree.Refresh()
 		return m, reloadGitCmd(m.root)
 	case "d":
 		if target := m.diffTarget(); target != "" {

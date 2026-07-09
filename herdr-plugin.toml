@@ -1,8 +1,8 @@
 id = "ismaelosuna.file-viewer"
 name = "File Viewer"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.7.0"
-description = "A pretty file browser, fuzzy file finder and in-file content search for Herdr panes."
+description = "File explorer, code viewer (syntax + markdown), fuzzy finder, content search and a full git client — in one Herdr pane."
 platforms = ["linux", "macos"]
 
 # At install time, download the prebuilt binary for the user's platform (no Go

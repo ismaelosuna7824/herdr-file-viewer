@@ -72,13 +72,80 @@ func (t *Tree) loadChildren(n *Node) {
 			Depth: n.Depth + 1,
 		})
 	}
-	sort.SliceStable(n.children, func(i, j int) bool {
-		a, b := n.children[i], n.children[j]
+	sortChildren(n.children)
+}
+
+func sortChildren(nodes []*Node) {
+	sort.SliceStable(nodes, func(i, j int) bool {
+		a, b := nodes[i], nodes[j]
 		if a.IsDir != b.IsDir {
 			return a.IsDir
 		}
 		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
 	})
+}
+
+// Refresh re-reads every directory already loaded from disk, so files created,
+// renamed or deleted while the viewer is open show up. Expansion state and the
+// cursor (by path) are preserved.
+func (t *Tree) Refresh() {
+	var selPath string
+	if n := t.Selected(); n != nil {
+		selPath = n.Path
+	}
+	t.refreshNode(t.Root)
+	t.rebuild()
+	if selPath != "" {
+		for i, v := range t.visible {
+			if v.Path == selPath {
+				t.cursor = i
+				break
+			}
+		}
+	}
+	if t.cursor >= len(t.visible) {
+		t.cursor = len(t.visible) - 1
+	}
+	if t.cursor < 0 {
+		t.cursor = 0
+	}
+}
+
+// refreshNode re-reads a loaded directory, merging disk contents with the
+// in-memory tree so existing nodes keep their expanded/loaded state while new
+// entries appear and deleted ones drop. Recurses into expanded subdirectories.
+func (t *Tree) refreshNode(n *Node) {
+	if !n.IsDir || !n.loaded {
+		return
+	}
+	entries, err := os.ReadDir(n.Path)
+	if err != nil {
+		return
+	}
+	existing := make(map[string]*Node, len(n.children))
+	for _, c := range n.children {
+		existing[c.Name] = c
+	}
+	merged := make([]*Node, 0, len(entries))
+	for _, e := range entries {
+		if old, ok := existing[e.Name()]; ok {
+			merged = append(merged, old)
+		} else {
+			merged = append(merged, &Node{
+				Name:  e.Name(),
+				Path:  filepath.Join(n.Path, e.Name()),
+				IsDir: e.IsDir(),
+				Depth: n.Depth + 1,
+			})
+		}
+	}
+	sortChildren(merged)
+	n.children = merged
+	for _, c := range n.children {
+		if c.IsDir && c.Expanded {
+			t.refreshNode(c)
+		}
+	}
 }
 
 func (t *Tree) expand(n *Node) {
