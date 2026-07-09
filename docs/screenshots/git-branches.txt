@@ -1,0 +1,28 @@
+   File Viewer — file-viewer  ⎇ main                                                            
+▾ file-viewer/                    │  no file                                                    
+  ▸ .atl/                         │                                                             
+  ▸ bin/                          │                                                             
+  ▸ cmd/                          │                                                             
+  ▸ docs/                         │                                                             
+  ▸ internal/                     │                                                             
+    .gitignore                    │                                                             
+    go.mod                        │                                                             
+    go.sum                        │                                                             
+    herdr-plugin.toml             │                                                             
+    README.md                     │                                                             
+                                  │                                                             
+                                  │                                                             
+                                  │                                                             
+                                  │                                                             
+                                  │                                                             
+                                  │                                                             
+── FIND FILE ────────────────────────────────── ── BRANCHES · main ─────────────────────────────
+ ⌕ Go to file…                                   ▸ ● main  (current)                            
+ ─────────────────────────────────────────────     feature/git-panel                            
+ ▸ cmd/file-viewer/main.go                         perf/async-highlight                         
+   internal/ui/app.go                                                                           
+   internal/search/engine.go                                                                    
+   README.md                                                                                    
+                                                                                                
+ 4 files                                                                                        
+ tab · ^p find · ^f search · g log · d diff · L locate · o os · m md · ? help · q quit          

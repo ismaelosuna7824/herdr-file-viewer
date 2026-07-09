@@ -1,0 +1,28 @@
+   File Viewer — file-viewer  ⎇ main                                                            
+ ╭────────────────────────────────────────────────────────────────────────────────────────────╮ 
+ │                                                                                            │ 
+ │  Keybindings                                                                               │ 
+ │                                                                                            │ 
+ │  Browser                                         Git · staging (changes)                   │ 
+ │    ↑ ↓ / k j      move / preview                   space          stage / unstage file     │ 
+ │    → / enter      open / expand                    A / U          stage all / unstage all  │ 
+ │    ← / esc        collapse / back                  c              commit staged            │ 
+ │    space          toggle dir                       enter          view file diff           │ 
+ │    L              locate file in tree                                                      │ 
+ │    o              open location in OS            Git · local ops                           │ 
+ │    d              review diff                      n              new branch               │ 
+ │    m              render markdown                  A              stage all (add -A)       │ 
+ │    r              refresh git                      c              commit all               │ 
+ │                                                    a              amend last commit        │ 
+ │  Move between panels                               u              undo last commit         │ 
+ │    tab            cycle panels                     t              tag at HEAD              │ 
+ │    alt+h/j/k/l    move by direction                m              merge → current          │ 
+ │    alt+arrows     move by direction                r              rebase → branch          │ 
+ │                                                    x              delete branch            │ 
+ │  Search panel                                                                              │ 
+ │    ^p             focus · find files             Git · remote / stash / reset              │ 
+ │    ^f             focus · search text              f              fetch --all --prune      │ 
+ │    ↑ ↓            move (previews)                  p              pull                     │ 
+ │    enter          open in file view                P              push                     │ 
+ │    ^t / ^w / ^r   case / word / regex              F              force-push (lease)       │ 
+ any key to close                                                                               

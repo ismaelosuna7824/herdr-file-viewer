@@ -1,0 +1,6 @@
+/bin/
+*.out
+
+# Local tooling / editor state (not part of the plugin)
+.atl/
+.DS_Store

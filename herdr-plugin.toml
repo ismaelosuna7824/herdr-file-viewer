@@ -1,0 +1,58 @@
+id = "ismaelosuna.file-viewer"
+name = "File Viewer"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "A pretty file browser, fuzzy file finder and in-file content search for Herdr panes."
+platforms = ["linux", "macos"]
+
+# Compile the Go TUI at install time. The binary is self-contained: no ripgrep,
+# fzf, or any external process is required at runtime.
+[[build]]
+command = ["go", "build", "-o", "bin/file-viewer", "./cmd/file-viewer"]
+
+# The pane that hosts the full-screen viewer. The command path is resolved
+# relative to the plugin root; `placement` is the default if the open request
+# doesn't override it.
+[[panes]]
+id = "viewer"
+title = "File Viewer"
+placement = "split"
+command = ["./bin/file-viewer"]
+
+# User-invokable action that opens the viewer pane. Herdr has no declarative
+# "open this pane" field on actions, so this shells out to the Herdr CLI
+# (exposed via HERDR_BIN_PATH) with the verified pane-open flags: --plugin +
+# --entrypoint select the pane, and it opens as a focused split on the right.
+# Open the viewer pane. We deliberately do NOT pass --cwd: Herdr opens a plugin
+# pane in the active workspace's directory by default, which is what we want.
+[[actions]]
+id = "open"
+title = "Open File Viewer"
+contexts = ["workspace"]
+command = [
+  "sh", "-c",
+  "\"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin ismaelosuna.file-viewer --entrypoint viewer --placement split --direction right --focus",
+]
+
+# Same viewer, opened in its own tab instead of a side split.
+[[actions]]
+id = "open-tab"
+title = "Open File Viewer (tab)"
+contexts = ["workspace"]
+command = [
+  "sh", "-c",
+  "\"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin ismaelosuna.file-viewer --entrypoint viewer --placement tab --focus",
+]
+
+# Default keybindings (a user's config.toml can override these).
+[[keys.command]]
+key = "prefix+f"
+type = "plugin_action"
+command = "ismaelosuna.file-viewer.open"
+description = "open file viewer (split)"
+
+[[keys.command]]
+key = "prefix+shift+f"
+type = "plugin_action"
+command = "ismaelosuna.file-viewer.open-tab"
+description = "open file viewer (tab)"
