@@ -255,7 +255,7 @@ path is appended automatically, so **don't** add a trailing `.`:
 # A leading * = default (e/E open in it directly, no prompt).
 # No default → you're asked which editor to use.
 * zed = open -a Zed
-  code = open -a "Visual Studio Code"
+  code = code
   nvim = nvim
   nano = nano
 ```
