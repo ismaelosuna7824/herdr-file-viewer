@@ -190,10 +190,38 @@ git clone https://github.com/ismaelosuna7824/herdr-file-viewer
 herdr plugin link herdr-file-viewer
 ```
 
-Either way, open the viewer with the bundled keybindings — `<prefix> f` (split
-beside your work) or `<prefix> Shift+f` (its own tab) — or from the action menu:
-**Open File Viewer** / **Open File Viewer (tab)**. Press `?` inside for the full
-keybinding reference.
+## Opening the viewer
+
+The plugin ships with two default keybindings (declared in its manifest):
+
+| Keys | Opens |
+|------|-------|
+| `<prefix> f` | The viewer in a **split** beside your work |
+| `<prefix> Shift+f` | The viewer in **its own tab** |
+
+(`<prefix>` is your Herdr prefix key.) You can also run it from the action menu:
+**Open File Viewer** / **Open File Viewer (tab)**.
+
+### Custom keybindings
+
+To use different keys, add them to `~/.config/herdr/config.toml`, invoking the
+plugin's actions (`open` = split, `open-tab` = tab):
+
+```toml
+[[keys.command]]              # open beside your work (split)
+key = "prefix+f"
+type = "shell"
+command = "herdr plugin action invoke open --plugin ismaelosuna.file-viewer"
+
+[[keys.command]]              # …or in its own tab
+key = "prefix+shift+f"
+type = "shell"
+command = "herdr plugin action invoke open-tab --plugin ismaelosuna.file-viewer"
+```
+
+Swap `prefix+f` / `prefix+shift+f` for whatever keys you like. Reload Herdr (or
+your config) for the changes to take effect. Once open, press `?` for the full
+in-app keybinding reference.
 
 ## Develop
 
