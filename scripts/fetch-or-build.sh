@@ -42,7 +42,7 @@ download() {
 build_from_source() {
   command -v go >/dev/null 2>&1 || return 1
   echo "Building from source with Go…"
-  ( cd "$DIR" && go build -o bin/file-viewer ./cmd/file-viewer )
+  ( cd "$DIR" && go build -ldflags "-X main.version=$VERSION" -o bin/file-viewer ./cmd/file-viewer )
 }
 
 if download; then

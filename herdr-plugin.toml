@@ -1,6 +1,6 @@
 id = "ismaelosuna.file-viewer"
 name = "File Viewer"
-version = "0.1.3"
+version = "0.1.4"
 min_herdr_version = "0.7.0"
 description = "File explorer, code viewer (syntax + markdown), fuzzy finder, content search and a full git client — in one Herdr pane."
 platforms = ["linux", "macos"]

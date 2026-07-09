@@ -21,8 +21,12 @@ import (
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/ui"
 )
 
+// version is injected at build time via -ldflags "-X main.version=vX.Y.Z".
+var version = "dev"
+
 func main() {
 	root := resolveRoot()
+	ui.SetVersion(version)
 
 	model, err := ui.New(root)
 	if err != nil {

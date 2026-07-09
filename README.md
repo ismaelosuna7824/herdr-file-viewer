@@ -223,6 +223,16 @@ Swap `prefix+f` / `prefix+shift+f` for whatever keys you like. Reload Herdr (or
 your config) for the changes to take effect. Once open, press `?` for the full
 in-app keybinding reference.
 
+## Updating
+
+On startup the viewer checks GitHub for a newer release and shows a notice in the
+header (e.g. `⬆ v0.1.4 available`) when one exists. To update, re-run the install
+command — it pulls the latest and rebuilds/downloads the binary:
+
+```sh
+herdr plugin install ismaelosuna7824/herdr-file-viewer
+```
+
 ## Develop
 
 ```sh

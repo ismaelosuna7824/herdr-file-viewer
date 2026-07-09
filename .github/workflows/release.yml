@@ -25,7 +25,8 @@ jobs:
             os=${target%/*}; arch=${target#*/}
             echo "building $os/$arch"
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-              go build -o "dist/file-viewer-$os-$arch" ./cmd/file-viewer
+              go build -ldflags "-X main.version=${GITHUB_REF_NAME}" \
+              -o "dist/file-viewer-$os-$arch" ./cmd/file-viewer
           done
 
       - name: Publish binaries to the release

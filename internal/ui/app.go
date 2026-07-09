@@ -26,8 +26,20 @@ import (
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/gitstatus"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/reveal"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/search"
+	"github.com/ismaelosuna7824/herdr-file-viewer/internal/update"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/viewer"
 )
+
+// version is the running build's version, injected via -ldflags and set from
+// main. "dev" (the default) suppresses the update check.
+var version = "dev"
+
+// SetVersion records the running build version (called from main at startup).
+func SetVersion(v string) {
+	if v != "" {
+		version = v
+	}
+}
 
 type mode int
 
@@ -75,9 +87,10 @@ type Model struct {
 	diff   diffPanel
 	log    logPanel
 
-	git         gitstatus.Status
-	currentFile string // absolute path of the file shown in the viewer
-	diffReturn  mode   // where Esc from the diff view returns to
+	git          gitstatus.Status
+	currentFile  string // absolute path of the file shown in the viewer
+	diffReturn   mode   // where Esc from the diff view returns to
+	updateLatest string // newer release tag, if one is available
 
 	// Git-operation overlays (new branch / commit prompt, and confirm dialogs).
 	prompt      gitOp
@@ -128,6 +141,9 @@ type gitOpDoneMsg struct{ err error }
 
 type diffLoadedMsg struct{ diff gitdiff.FileDiff }
 
+// updateMsg carries a newer release tag (empty = up to date).
+type updateMsg struct{ latest string }
+
 // highlightMsg carries the result of asynchronous syntax highlighting.
 type highlightMsg struct {
 	gen   int
@@ -168,7 +184,7 @@ func New(root string) (Model, error) {
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(loadFilesCmd(m.root), loadGitStatusCmd(m.root),
 		loadGitLogCmd(m.root), loadBranchesCmd(m.root), loadChangesCmd(m.root),
-		tickCmd())
+		checkUpdateCmd(), tickCmd())
 }
 
 // --- commands ---------------------------------------------------------------
@@ -207,6 +223,18 @@ func loadBranchesCmd(root string) tea.Cmd {
 func loadChangesCmd(root string) tea.Cmd {
 	return func() tea.Msg {
 		return gitChangesMsg{changes: gitstatus.Changes(context.Background(), root)}
+	}
+}
+
+// checkUpdateCmd asks GitHub for the latest release and reports it if it's newer
+// than the running build. Best-effort: errors just yield "no update".
+func checkUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		latest, err := update.Latest(context.Background())
+		if err != nil || !update.IsNewer(latest, version) {
+			return updateMsg{}
+		}
+		return updateMsg{latest: latest}
 	}
 }
 
@@ -325,6 +353,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case diffLoadedMsg:
 		m.diff.SetDiff(msg.diff)
+		return m, nil
+
+	case updateMsg:
+		m.updateLatest = msg.latest
 		return m, nil
 
 	case highlightMsg:
@@ -1247,10 +1279,14 @@ func (m Model) headerText() string {
 	if m.git.Branch != "" {
 		branch = "  ⎇ " + m.git.Branch
 	}
+	title := "  File Viewer — " + name + branch
 	if m.mode == modeDiff {
-		return "  Review — " + name + branch
+		title = "  Review — " + name + branch
 	}
-	return "  File Viewer — " + name + branch
+	if m.updateLatest != "" {
+		title += "   ⬆ " + m.updateLatest + " available (reinstall to update)"
+	}
+	return title
 }
 
 // renderExplorer draws the file tree column with git decorations and a
