@@ -20,6 +20,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/ismaelosuna7824/herdr-file-viewer/internal/editor"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/explorer"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/gitdiff"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/gitlog"
@@ -91,6 +92,7 @@ type Model struct {
 	currentFile  string // absolute path of the file shown in the viewer
 	diffReturn   mode   // where Esc from the diff view returns to
 	updateLatest string // newer release tag, if one is available
+	statusNote   string // transient footer note (e.g. "no editor set")
 
 	// Git-operation overlays (new branch / commit prompt, and confirm dialogs).
 	prompt      gitOp
@@ -143,6 +145,9 @@ type diffLoadedMsg struct{ diff gitdiff.FileDiff }
 
 // updateMsg carries a newer release tag (empty = up to date).
 type updateMsg struct{ latest string }
+
+// editorClosedMsg fires when the external editor exits, so we reload the file.
+type editorClosedMsg struct{}
 
 // highlightMsg carries the result of asynchronous syntax highlighting.
 type highlightMsg struct {
@@ -359,6 +364,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateLatest = msg.latest
 		return m, nil
 
+	case editorClosedMsg:
+		// The file may have changed in the editor — reload the view and git.
+		m.tree.Refresh()
+		var cmd tea.Cmd
+		if m.currentFile != "" {
+			cmd = m.showFile(m.currentFile)
+		}
+		return m, tea.Batch(cmd, reloadGitCmd(m.root))
+
 	case highlightMsg:
 		if msg.gen == m.highlightGen {
 			m.viewer.SetHighlighted(msg.path, msg.lines)
@@ -494,6 +508,8 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleBrowseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.statusNote = "" // transient — cleared on the next keypress
+
 	// Directional panel movement (Alt+h/j/k/l and Alt+arrows) works from any
 	// panel, including while the search input is focused.
 	if dir, ok := focusDirection(msg.String()); ok {
@@ -539,6 +555,15 @@ func (m Model) handleBrowseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Open the file's location in the OS file manager (Finder/Explorer/…).
 		if t := m.revealTarget(); t != "" {
 			return m, revealCmd(t)
+		}
+		return m, nil
+	case "e":
+		// Open the file in the user's editor ($VISUAL/$EDITOR/FILE_VIEWER_EDITOR).
+		if t := m.editTarget(); t != "" {
+			if cmd := editor.Command(t); cmd != nil {
+				return m, tea.ExecProcess(cmd, func(error) tea.Msg { return editorClosedMsg{} })
+			}
+			m.statusNote = "no editor set — export EDITOR=nvim (or code, zed, hx…)"
 		}
 		return m, nil
 	case "?":
@@ -953,6 +978,17 @@ func (m *Model) previewSelected() tea.Cmd {
 	return nil
 }
 
+// editTarget returns the file to open in the editor: the selected tree node if
+// it's a file, otherwise the file open in the viewer.
+func (m Model) editTarget() string {
+	if m.bfocus == focusExplorer {
+		if n := m.tree.Selected(); n != nil && !n.IsDir {
+			return n.Path
+		}
+	}
+	return m.currentFile
+}
+
 // revealTarget returns the path to reveal in the OS file manager: the selected
 // tree node (file or directory) when the explorer is focused, otherwise the
 // file currently open in the viewer.
@@ -1214,7 +1250,10 @@ func (m Model) viewBrowse() string {
 	bottom := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gap, rightPanel)
 
 	body := lipgloss.JoinVertical(lipgloss.Left, top, bottom)
-	help := "tab · ^p find · ^f search · g log · d diff · L locate · o os · m md · ? help · q quit"
+	help := "tab · ^p find · ^f search · g log · d diff · e edit · L locate · o os · m md · ? help · q quit"
+	if m.statusNote != "" {
+		help = m.statusNote
+	}
 	return m.frame(body, help)
 }
 
@@ -1267,8 +1306,10 @@ func (m Model) viewHelp() string {
 
 // frame wraps body content with the header title bar and footer help line.
 func (m Model) frame(body, help string) string {
-	title := m.st.header.Width(m.width).Render(m.headerText())
-	footer := m.st.footer.Width(m.width).Render(" " + help)
+	// Truncate header/footer to one line each — a string wider than the pane
+	// would wrap and push the layout a row too tall (clipping the bottom).
+	title := m.st.header.Width(m.width).Render(truncateLine(m.headerText(), m.width))
+	footer := m.st.footer.Width(m.width).Render(truncateLine(" "+help, m.width))
 	body = clampHeight(body, m.height-2)
 	return lipgloss.JoinVertical(lipgloss.Left, title, body, footer)
 }

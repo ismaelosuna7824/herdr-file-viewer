@@ -129,6 +129,7 @@ red inside the panel — nothing silently fails.
 | `Ctrl+F` | Focus the search panel in content-search mode |
 | `L` | Locate the open file in the tree (reveal + focus it) |
 | `o` | Open the file's location in the OS file manager |
+| `e` | Edit the file in your editor (`$VISUAL`/`$EDITOR`) |
 | `d` | Review the selected/open file's diff against `HEAD` |
 | `g` | Focus the git-log panel (toggle back to the tree) |
 | `m` | Toggle rendered markdown ↔ source (markdown files only) |
@@ -222,6 +223,27 @@ command = "herdr plugin action invoke open-tab --plugin ismaelosuna.file-viewer"
 Swap `prefix+f` / `prefix+shift+f` for whatever keys you like. Reload Herdr (or
 your config) for the changes to take effect. Once open, press `?` for the full
 in-app keybinding reference.
+
+## Editing files
+
+The viewer is read-only, but `e` opens the current file in **your** editor — it
+never bundles one. It resolves the command from these, in order:
+
+| Variable | Notes |
+|----------|-------|
+| `FILE_VIEWER_EDITOR` | plugin-specific override |
+| `VISUAL` | standard, for full-screen editors |
+| `EDITOR` | standard fallback |
+
+The value is a full command, so any editor works — terminal ones open in the
+pane and hand it back on exit; GUI ones open their window:
+
+```sh
+export EDITOR=nvim         # or: hx, vim
+export VISUAL="code --wait"  # or: zed --wait, subl --wait
+```
+
+After you save and close, the viewer reloads the file and git status.
 
 ## Updating
 
