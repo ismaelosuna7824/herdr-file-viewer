@@ -231,6 +231,34 @@ func UnstageAll(ctx context.Context, root string) error {
 	return runGit(ctx, root, "reset", "-q")
 }
 
+// ApplyCachedPatch pipes a unified-diff patch to `git apply --cached` on stdin,
+// mutating only the index (never the working tree). It is the mechanism behind
+// hunk-level staging: pass a single file-header+hunk patch to stage that hunk.
+// When reverse is true it applies with --reverse, which unstages the hunk.
+// --recount tolerates hunk line-count drift from isolating one hunk out of many.
+// git's stderr is surfaced on failure so the UI can show why apply was rejected.
+func ApplyCachedPatch(ctx context.Context, root, patch string, reverse bool) error {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	args := []string{"-C", abs, "apply", "--cached", "--recount"}
+	if reverse {
+		args = append(args, "--reverse")
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Stdin = strings.NewReader(patch)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return errors.New(msg)
+	}
+	return nil
+}
+
 // CreateTag creates a lightweight tag at HEAD.
 func CreateTag(ctx context.Context, root, name string) error {
 	return runGit(ctx, root, "tag", name)

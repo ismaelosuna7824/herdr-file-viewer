@@ -22,9 +22,13 @@ type diffPanel struct {
 	width      int
 	height     int
 
+	hunkCursor   int   // index of the selected hunk (for hunk-level staging)
+	hunkLineRows []int // rendered row index of each hunk header, current layout
+
 	add     lipgloss.Style
 	del     lipgloss.Style
 	hunk    lipgloss.Style
+	hunkSel lipgloss.Style
 	gutter  lipgloss.Style
 	ctx     lipgloss.Style
 	fileHdr lipgloss.Style
@@ -40,6 +44,7 @@ func newDiffPanel() diffPanel {
 		add:     lipgloss.NewStyle().Foreground(colGitNew),
 		del:     lipgloss.NewStyle().Foreground(colGitDeleted),
 		hunk:    lipgloss.NewStyle().Foreground(colAccent).Bold(true),
+		hunkSel: lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(colAccent).Bold(true),
 		gutter:  lipgloss.NewStyle().Foreground(colMuted),
 		ctx:     lipgloss.NewStyle().Foreground(colText),
 		fileHdr: lipgloss.NewStyle().Foreground(colDir).Bold(true).Underline(true),
@@ -62,8 +67,60 @@ func (p *diffPanel) SetDiff(d gitdiff.FileDiff) {
 	// A modified file (has removals) is far clearer side-by-side; a brand-new
 	// file is all additions, so inline reads better. Auto-pick, user can toggle.
 	p.sideBySide = d.Removed > 0
+	// Keep the hunk cursor within the (possibly reduced) hunk set — e.g. after
+	// staging a hunk the diff reloads with one fewer hunk.
+	if n := p.hunkCount(); p.hunkCursor >= n {
+		p.hunkCursor = n - 1
+	}
+	if p.hunkCursor < 0 {
+		p.hunkCursor = 0
+	}
 	p.render()
 	p.vp.GotoTop()
+}
+
+// hunkCount returns the number of hunks in the current diff.
+func (p diffPanel) hunkCount() int {
+	n := 0
+	for _, ln := range p.diff.Lines {
+		if ln.Kind == gitdiff.Hunk {
+			n++
+		}
+	}
+	return n
+}
+
+// currentHunk returns the 0-based index of the selected hunk.
+func (p diffPanel) currentHunk() int { return p.hunkCursor }
+
+// moveHunk advances the hunk cursor by delta (clamped) and scrolls it into view.
+func (p *diffPanel) moveHunk(delta int) {
+	n := p.hunkCount()
+	if n == 0 {
+		p.hunkCursor = 0
+		return
+	}
+	p.hunkCursor += delta
+	if p.hunkCursor < 0 {
+		p.hunkCursor = 0
+	}
+	if p.hunkCursor >= n {
+		p.hunkCursor = n - 1
+	}
+	p.render()
+	p.scrollToHunk()
+}
+
+// scrollToHunk moves the viewport so the selected hunk header sits near the top.
+func (p *diffPanel) scrollToHunk() {
+	if p.hunkCursor < 0 || p.hunkCursor >= len(p.hunkLineRows) {
+		return
+	}
+	target := p.hunkLineRows[p.hunkCursor] - 1
+	if target < 0 {
+		target = 0
+	}
+	p.vp.SetYOffset(target)
 }
 
 // toggleLayout flips between the inline and side-by-side diff layouts.
@@ -83,6 +140,7 @@ func (p *diffPanel) splitView() bool {
 func (p *diffPanel) beginLoad(rel string) {
 	p.loading = true
 	p.diff = gitdiff.FileDiff{Path: rel}
+	p.hunkCursor = 0
 	p.render()
 }
 
@@ -118,6 +176,7 @@ func (p diffPanel) statsBar() string {
 }
 
 func (p *diffPanel) render() {
+	p.hunkLineRows = p.hunkLineRows[:0]
 	if p.loading {
 		p.vp.SetContent(p.gutter.Render("\n  loading diff…"))
 		return
@@ -127,7 +186,7 @@ func (p *diffPanel) render() {
 		return
 	}
 	if p.diff.Empty || len(p.diff.Lines) == 0 {
-		p.vp.SetContent(p.gutter.Render("\n  no changes against HEAD"))
+		p.vp.SetContent(p.gutter.Render("\n  no changes in this review"))
 		return
 	}
 
@@ -137,14 +196,31 @@ func (p *diffPanel) render() {
 	}
 
 	gw := p.gutterWidth()
-	var b strings.Builder
-	for i, ln := range p.diff.Lines {
-		b.WriteString(p.renderLine(ln, gw))
-		if i < len(p.diff.Lines)-1 {
-			b.WriteByte('\n')
+	var rows []string
+	hunkIdx := 0
+	for _, ln := range p.diff.Lines {
+		switch ln.Kind {
+		case gitdiff.FileHeader:
+			rows = append(rows, "")
+			rows = append(rows, p.fileHdr.Render("▸ "+truncateLine(ln.Text, p.width-2)))
+		case gitdiff.Hunk:
+			p.hunkLineRows = append(p.hunkLineRows, len(rows))
+			rows = append(rows, p.renderHunkHeader(ln.Text, hunkIdx == p.hunkCursor))
+			hunkIdx++
+		default:
+			rows = append(rows, p.renderLine(ln, gw))
 		}
 	}
-	p.vp.SetContent(b.String())
+	p.vp.SetContent(strings.Join(rows, "\n"))
+}
+
+// renderHunkHeader draws a hunk's "@@ … @@" line, highlighting it when it is the
+// staging cursor's current hunk so the user sees what space will stage.
+func (p diffPanel) renderHunkHeader(text string, selected bool) string {
+	if selected {
+		return p.hunkSel.Render("▶ " + truncateLine(text, p.width-2))
+	}
+	return p.hunk.Render("  " + truncateLine(text, p.width-2))
 }
 
 func (p *diffPanel) renderLine(ln gitdiff.Line, gw int) string {
@@ -275,22 +351,24 @@ func (p *diffPanel) renderSideBySide() string {
 	}
 	sep := p.gutter.Render(" │ ")
 
-	var b strings.Builder
-	for i, r := range rows {
-		if r.header != "" {
-			b.WriteString("\n" + p.fileHdr.Render("▸ "+truncateLine(r.header, p.width-2)))
-		} else if r.hunk != "" {
-			b.WriteString(p.hunk.Render(truncateLine(r.hunk, p.width)))
-		} else {
+	var out []string
+	hunkIdx := 0
+	for _, r := range rows {
+		switch {
+		case r.header != "":
+			out = append(out, "")
+			out = append(out, p.fileHdr.Render("▸ "+truncateLine(r.header, p.width-2)))
+		case r.hunk != "":
+			p.hunkLineRows = append(p.hunkLineRows, len(out))
+			out = append(out, p.renderHunkHeader(r.hunk, hunkIdx == p.hunkCursor))
+			hunkIdx++
+		default:
 			left := p.sideCell(r.lNum, r.lText, r.lDel, false, gw, colW)
 			right := p.sideCell(r.rNum, r.rText, false, r.rAdd, gw, colW)
-			b.WriteString(left + sep + right)
-		}
-		if i < len(rows)-1 {
-			b.WriteByte('\n')
+			out = append(out, left+sep+right)
 		}
 	}
-	return b.String()
+	return strings.Join(out, "\n")
 }
 
 // sideCell renders one column of a split-diff row: a line-number gutter plus the

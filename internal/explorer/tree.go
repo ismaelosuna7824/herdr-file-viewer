@@ -264,3 +264,106 @@ func (t *Tree) RevealPath(target string) bool {
 	}
 	return false
 }
+
+// State is the user-visible explorer state that survives a plugin restart.
+// Paths are slash-separated and relative to the tree root; "." is the root.
+type State struct {
+	Expanded []string
+	Selected string
+}
+
+// Snapshot returns expanded directories and the selected row without exposing
+// the tree's lazy-loading internals to the UI persistence layer.
+func (t *Tree) Snapshot() State {
+	state := State{}
+	var walk func(*Node)
+	walk = func(node *Node) {
+		if node.IsDir && node.Expanded {
+			if rel, ok := t.relativePath(node.Path); ok {
+				state.Expanded = append(state.Expanded, rel)
+			}
+		}
+		for _, child := range node.children {
+			walk(child)
+		}
+	}
+	walk(t.Root)
+	if selected := t.Selected(); selected != nil {
+		state.Selected, _ = t.relativePath(selected.Path)
+	}
+	return state
+}
+
+// Restore applies a previous Snapshot. Missing or out-of-root paths are
+// ignored so deleted files and stale/corrupt state cannot break the explorer.
+func (t *Tree) Restore(state State) {
+	var collapse func(*Node)
+	collapse = func(node *Node) {
+		if node.IsDir {
+			node.Expanded = false
+		}
+		for _, child := range node.children {
+			collapse(child)
+		}
+	}
+	collapse(t.Root)
+
+	expanded := append([]string(nil), state.Expanded...)
+	sort.SliceStable(expanded, func(i, j int) bool {
+		return strings.Count(expanded[i], "/") < strings.Count(expanded[j], "/")
+	})
+	for _, rel := range expanded {
+		t.expandRelative(rel)
+	}
+	t.rebuild()
+	if target, ok := t.absolutePath(state.Selected); ok {
+		t.RevealPath(target)
+	}
+}
+
+func (t *Tree) expandRelative(rel string) {
+	target, ok := t.absolutePath(rel)
+	if !ok {
+		return
+	}
+	cleanRel, _ := filepath.Rel(t.Root.Path, target)
+	node := t.Root
+	if cleanRel != "." {
+		for _, part := range strings.Split(cleanRel, string(filepath.Separator)) {
+			t.expand(node)
+			var next *Node
+			for _, child := range node.children {
+				if child.Name == part {
+					next = child
+					break
+				}
+			}
+			if next == nil {
+				return
+			}
+			node = next
+		}
+	}
+	if node.IsDir {
+		t.expand(node)
+	}
+}
+
+func (t *Tree) relativePath(path string) (string, bool) {
+	rel, err := filepath.Rel(t.Root.Path, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+func (t *Tree) absolutePath(rel string) (string, bool) {
+	if rel == "" || filepath.IsAbs(rel) {
+		return "", false
+	}
+	target := filepath.Clean(filepath.Join(t.Root.Path, filepath.FromSlash(rel)))
+	if _, ok := t.relativePath(target); !ok {
+		return "", false
+	}
+	return target, true
+}

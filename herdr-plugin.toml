@@ -11,6 +11,15 @@ platforms = ["linux", "macos"]
 [[build]]
 command = ["sh", "scripts/fetch-or-build.sh"]
 
+# Attach one unfocused File Viewer to the right of a workspace's initial pane
+# whenever the workspace is focused (entered). The hook waits for Herdr's first
+# pane and attaches without taking focus. It is idempotent: it skips attaching
+# when a File Viewer already exists, so re-focusing a workspace never stacks
+# duplicate viewers.
+[[events]]
+on = "workspace.focused"
+command = ["./bin/file-viewer", "--workspace-created"]
+
 # The pane that hosts the full-screen viewer. The command path is resolved
 # relative to the plugin root; `placement` is the default if the open request
 # doesn't override it.
@@ -19,6 +28,31 @@ id = "viewer"
 title = "File Viewer"
 placement = "split"
 command = ["./bin/file-viewer"]
+
+# File content opened as a workspace tab by explorer clicks. The pane is
+# read-only. The selected path is injected through HERDR_FILE_PATH by the
+# pane-open command. File panes launch in the selected file's directory so their
+# cwd is a non-visual ownership marker for same-basename tab reuse. Resolve the
+# binary through Herdr's authoritative plugin-root environment variable so
+# --cwd does not break the executable path. The pane label MUST stay "File":
+# the dedup logic in internal/herdr/tabs.go matches on it.
+[[panes]]
+id = "file"
+title = "File"
+placement = "tab"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/file-viewer\""]
+
+# Read-only staged/worktree/untracked diff review opened as a workspace tab from
+# the staging view. HERDR_DIFF_PATH, HERDR_DIFF_ROOT and HERDR_DIFF_MODE are
+# injected by the pane-open command. The pane label MUST stay "Diff": the diff
+# dedup logic in internal/herdr/tabs.go matches on it. Resolve the binary through
+# Herdr's authoritative plugin-root environment variable so --cwd does not break
+# the executable path.
+[[panes]]
+id = "diff"
+title = "Diff"
+placement = "tab"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/file-viewer\""]
 
 # User-invokable action that opens the viewer pane. Herdr has no declarative
 # "open this pane" field on actions, so this shells out to the Herdr CLI

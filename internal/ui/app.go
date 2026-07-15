@@ -12,6 +12,8 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/gitdiff"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/gitlog"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/gitstatus"
+	"github.com/ismaelosuna7824/herdr-file-viewer/internal/herdr"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/reveal"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/search"
 	"github.com/ismaelosuna7824/herdr-file-viewer/internal/update"
@@ -71,11 +74,12 @@ const explorerWidth = 34
 
 // Model is the root application state.
 type Model struct {
-	root   string
-	width  int
-	height int
-	ready  bool
-	st     styles
+	root          string
+	width         int
+	height        int
+	ready         bool
+	treeStatePath string
+	st            styles
 
 	mode   mode
 	bfocus browseFocus
@@ -89,10 +93,12 @@ type Model struct {
 	log    logPanel
 
 	git          gitstatus.Status
-	currentFile  string // absolute path of the file shown in the viewer
-	diffReturn   mode   // where Esc from the diff view returns to
-	updateLatest string // newer release tag, if one is available
-	statusNote   string // transient footer note (e.g. "no editor set")
+	currentFile  string       // absolute path of the file shown in the viewer
+	diffReturn   mode         // where Esc from the diff view returns to
+	diffRel      string       // slash path of the file in the review view
+	diffMode     gitdiff.Mode // which boundary the review view shows (for hunk staging)
+	updateLatest string       // newer release tag, if one is available
+	statusNote   string       // transient footer note (e.g. "no editor set")
 
 	// Editor picker overlay (shown when no default editor is configured).
 	pickerActive  bool
@@ -150,12 +156,26 @@ type gitOpDoneMsg struct{ err error }
 
 type diffLoadedMsg struct{ diff gitdiff.FileDiff }
 
+// diffReloadedMsg carries the re-fetched diff after a hunk was staged. Unlike
+// diffLoadedMsg it lets the review view pop back to the list when nothing
+// remains to stage.
+type diffReloadedMsg struct{ diff gitdiff.FileDiff }
+
+// hunkStagedMsg reports the result of staging/unstaging a single hunk.
+type hunkStagedMsg struct{ err error }
+
 // updateMsg carries a newer release tag (empty = up to date).
 type updateMsg struct{ latest string }
 
 // editorClosedMsg fires when the external editor exits (err set if it failed to
 // launch, e.g. the command isn't on PATH).
 type editorClosedMsg struct{ err error }
+
+// fileTabOpenedMsg reports the result of opening a file in a Herdr tab.
+type fileTabOpenedMsg struct{ err error }
+
+// diffTabOpenedMsg reports the result of opening a diff review in a Herdr tab.
+type diffTabOpenedMsg struct{ err error }
 
 // highlightMsg carries the result of asynchronous syntax highlighting.
 type highlightMsg struct {
@@ -180,17 +200,20 @@ func New(root string) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
-	return Model{
-		root:        abs,
-		st:          newStyles(),
-		tree:        tree,
-		viewer:      viewer.New(),
-		finder:      newFinderPanel(),
-		search:      newSearchPanel(),
-		diff:        newDiffPanel(),
-		log:         newLogPanel(),
-		promptInput: newPromptInput(),
-	}, nil
+	model := Model{
+		root:          abs,
+		treeStatePath: treeStatePathFromEnv(),
+		st:            newStyles(),
+		tree:          tree,
+		viewer:        viewer.New(),
+		finder:        newFinderPanel(),
+		search:        newSearchPanel(),
+		diff:          newDiffPanel(),
+		log:           newLogPanel(),
+		promptInput:   newPromptInput(),
+	}
+	model.restoreTreeState()
+	return model, nil
 }
 
 // Init kicks off the background file index, git status scan, and git log load.
@@ -218,6 +241,22 @@ func loadGitStatusCmd(root string) tea.Cmd {
 func loadDiffCmd(root, rel string, untracked bool) tea.Cmd {
 	return func() tea.Msg {
 		return diffLoadedMsg{diff: gitdiff.Load(context.Background(), root, rel, untracked)}
+	}
+}
+
+// loadDiffModeCmd fetches a specific Source Control boundary (used by the
+// interactive review view so its hunks are exactly the ones that can be staged).
+func loadDiffModeCmd(root, rel string, mode gitdiff.Mode) tea.Cmd {
+	return func() tea.Msg {
+		return diffLoadedMsg{diff: gitdiff.LoadMode(context.Background(), root, rel, mode)}
+	}
+}
+
+// loadDiffReloadCmd re-fetches the review diff after a hunk was staged, tagged
+// so the view can return to the staging list once nothing remains.
+func loadDiffReloadCmd(root, rel string, mode gitdiff.Mode) tea.Cmd {
+	return func() tea.Msg {
+		return diffReloadedMsg{diff: gitdiff.LoadMode(context.Background(), root, rel, mode)}
 	}
 }
 
@@ -368,6 +407,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diff.SetDiff(msg.diff)
 		return m, nil
 
+	case diffReloadedMsg:
+		m.diff.SetDiff(msg.diff)
+		// Nothing left to stage in this file — drop back to the staging list.
+		if m.mode == modeDiff && (msg.diff.Empty || m.diff.hunkCount() == 0) {
+			m.mode = m.diffReturn
+		}
+		return m, nil
+
+	case hunkStagedMsg:
+		if msg.err != nil {
+			m.statusNote = "stage failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.statusNote = ""
+		// Refresh the review diff (same file+mode) and the git/staging signals.
+		return m, tea.Batch(
+			loadDiffReloadCmd(m.root, m.diffRel, m.diffMode),
+			reloadGitCmd(m.root),
+		)
+
 	case updateMsg:
 		m.updateLatest = msg.latest
 		return m, nil
@@ -384,6 +443,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.showFile(m.currentFile)
 		}
 		return m, tea.Batch(cmd, reloadGitCmd(m.root))
+
+	case fileTabOpenedMsg:
+		if msg.err != nil {
+			m.statusNote = "file tab failed: " + msg.err.Error()
+		}
+		return m, nil
+
+	case diffTabOpenedMsg:
+		if msg.err != nil {
+			m.statusNote = "diff tab failed: " + msg.err.Error()
+		}
+		return m, nil
 
 	case highlightMsg:
 		if msg.gen == m.highlightGen {
@@ -409,9 +480,95 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	}
 
 	return m.forwardToActive(msg)
+}
+
+// handleMouse maps a left click in the visible explorer region back to the
+// exact tree row. Directories toggle; files open as read-only Herdr tabs. Every
+// other mouse event — wheel scroll, drag, or any event outside plain browse mode
+// (e.g. the inline diff view or an overlay) — is forwarded to the active panel
+// so its viewport handles scrolling. This keeps click-to-open composed with
+// native mouse-wheel scrolling.
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if !m.ready || m.mode != modeBrowse || m.pickerActive || m.prompt != opNone || m.confirm != opNone {
+		return m.forwardToActive(msg)
+	}
+	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
+		return m.forwardToActive(msg)
+	}
+	topH, _, _, _ := m.browseDims()
+	if topH < 1 {
+		topH = 1
+	}
+	row := msg.Y - 1 // terminal row 0 is the app header
+	if msg.X < 0 || msg.X >= explorerWidth || row < 0 || row >= topH {
+		return m.forwardToActive(msg)
+	}
+	nodes := m.tree.Visible()
+	index := scrollStart(m.tree.Cursor(), len(nodes), topH) + row
+	if index < 0 || index >= len(nodes) {
+		return m, nil
+	}
+	m.tree.SetCursor(index)
+	m.bfocus = focusExplorer
+	n := m.tree.Selected()
+	if n == nil {
+		m.persistTreeState()
+		return m, nil
+	}
+	if n.IsDir {
+		m.tree.Toggle()
+		m.persistTreeState()
+		return m, nil
+	}
+	m.persistTreeState()
+	return m, m.openSelectedFileTab()
+}
+
+// openSelectedFileTab opens the selected file as a read-only Herdr tab with the
+// project tree attached on the right. Deduplication and locking live in herdr.
+func (m Model) openSelectedFileTab() tea.Cmd {
+	n := m.tree.Selected()
+	if n == nil || n.IsDir {
+		return nil
+	}
+	workspaceID := os.Getenv("HERDR_WORKSPACE_ID")
+	path := n.Path
+	root := m.root
+	return func() tea.Msg {
+		return fileTabOpenedMsg{err: herdr.OpenFileTab(workspaceID, path, root)}
+	}
+}
+
+// openDiffTab opens the selected changed file's diff as a read-only Herdr Diff
+// tab. Deduplication and locking (per path+mode) live in herdr.
+func (m Model) openDiffTab(change gitstatus.Change) tea.Cmd {
+	workspaceID := os.Getenv("HERDR_WORKSPACE_ID")
+	path := filepath.Join(m.root, filepath.FromSlash(change.Path))
+	root := m.root
+	mode := changeMode(change)
+	return func() tea.Msg {
+		return diffTabOpenedMsg{err: herdr.OpenDiffTab(workspaceID, path, root, mode)}
+	}
+}
+
+// changeMode maps a git status entry to the diff boundary to review: untracked
+// files show the whole file, staged files show the index diff, and everything
+// else shows the worktree diff.
+func changeMode(c gitstatus.Change) gitdiff.Mode {
+	switch {
+	case c.Untracked():
+		return gitdiff.ModeUntracked
+	case c.Staged():
+		return gitdiff.ModeStaged
+	default:
+		return gitdiff.ModeWorktree
+	}
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -756,6 +913,11 @@ func (m Model) handleLogFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.runGitOp(gitlog.UnstageAll)
 		case "c": // commit staged changes
 			return m, m.startPrompt(opCommit, "commit message")
+		case "d": // open the selected changed file's diff in a read-only Diff tab
+			if r, ok := m.log.selectedRow(); ok && !r.isDir {
+				return m, m.openDiffTab(r.change)
+			}
+			return m, nil
 		}
 		return m, nil
 	}
@@ -1107,14 +1269,23 @@ func (m Model) openDiff(abs string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	rel = filepath.ToSlash(rel)
-	untracked := m.git.FileCode(abs) == gitstatus.Untracked
+	// Review the UNSTAGED (worktree) changes so the visible hunks are exactly
+	// the ones `space` can stage. Untracked files have no index entry, so they
+	// diff against an empty file and are staged whole.
+	mode := gitdiff.ModeWorktree
+	if m.git.FileCode(abs) == gitstatus.Untracked {
+		mode = gitdiff.ModeUntracked
+	}
+	m.diffRel = rel
+	m.diffMode = mode
 	m.diff.beginLoad(rel)
 	m.diffReturn = modeBrowse
 	m.mode = modeDiff
-	return m, loadDiffCmd(m.root, rel, untracked)
+	return m, loadDiffModeCmd(m.root, rel, mode)
 }
 
-// handleDiffKey drives the review view.
+// handleDiffKey drives the review view: scroll, toggle layout, move the hunk
+// cursor, and stage the hunk under it.
 func (m Model) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "d", "q":
@@ -1123,10 +1294,57 @@ func (m Model) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		m.diff.toggleLayout()
 		return m, nil
+	case "]", "n":
+		m.diff.moveHunk(1)
+		return m, nil
+	case "[", "N":
+		m.diff.moveHunk(-1)
+		return m, nil
+	case " ":
+		return m.stageCurrentHunk()
 	}
 	var cmd tea.Cmd
 	m.diff, cmd = m.diff.Update(msg)
 	return m, cmd
+}
+
+// stageCurrentHunk stages the hunk under the review cursor into the index. It
+// mutates only the index via `git apply --cached` (worktree files) or `git add`
+// (untracked files); the working tree is never touched. On success the diff and
+// git status reload; when the diff shows a staged review the same key unstages.
+func (m Model) stageCurrentHunk() (tea.Model, tea.Cmd) {
+	if m.diff.diff.Binary {
+		m.statusNote = "binary file — cannot stage by hunk"
+		return m, nil
+	}
+	if m.diff.hunkCount() == 0 {
+		m.statusNote = "no hunk to stage"
+		return m, nil
+	}
+	root, rel, mode, idx := m.root, m.diffRel, m.diffMode, m.diff.currentHunk()
+
+	// An untracked file is one synthetic whole-file hunk; stage it with `git add`.
+	if mode == gitdiff.ModeUntracked {
+		m.statusNote = ""
+		return m, func() tea.Msg {
+			return hunkStagedMsg{err: gitlog.StageFile(context.Background(), root, rel)}
+		}
+	}
+
+	// A staged review unstages (apply --reverse); a worktree review stages.
+	reverse := mode == gitdiff.ModeStaged
+	m.statusNote = ""
+	return m, func() tea.Msg {
+		raw, err := gitdiff.LoadRaw(context.Background(), root, rel, mode)
+		if err != nil {
+			return hunkStagedMsg{err: err}
+		}
+		patch := raw.Patch(idx)
+		if patch == "" {
+			return hunkStagedMsg{err: errors.New("hunk is no longer present")}
+		}
+		return hunkStagedMsg{err: gitlog.ApplyCachedPatch(context.Background(), root, patch, reverse)}
+	}
 }
 
 // triggerSearch cancels any in-flight content search and starts a fresh one.
@@ -1393,7 +1611,7 @@ func (m Model) browseBody(bodyH int) string {
 }
 
 func (m Model) viewDiff() string {
-	help := "↑↓/pgup/pgdn scroll · s split/inline · d/esc/q back to browser"
+	help := "↑↓/pgup/pgdn scroll · ][/nN hunk · space stage hunk · s split/inline · d/esc/q back"
 	return m.frame(m.diff.View(), help)
 }
 

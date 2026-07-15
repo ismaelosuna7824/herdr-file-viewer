@@ -159,6 +159,11 @@ func (m Model) Raw() string { return m.raw }
 // Path returns the loaded file's path.
 func (m Model) Path() string { return m.path }
 
+// Editable reports whether the loaded file can be edited in-place. It excludes
+// directories, binary files, oversized files, and read errors because those are
+// represented as load errors by Load.
+func (m Model) Editable() bool { return m.path != "" && m.loadErr == "" }
+
 // ShouldHighlight reports whether the current file wants async syntax
 // highlighting (a readable text file not being shown as rendered markdown).
 func (m Model) ShouldHighlight() bool {
@@ -206,7 +211,7 @@ func (m *Model) render() {
 		return
 	}
 	if m.markdownActive() {
-		m.vp.SetContent(renderMarkdown(m.raw, m.vp.Width))
+		m.vp.SetContent(terminalHyperlinks(renderMarkdown(m.raw, m.vp.Width)))
 		return
 	}
 	if len(m.lines) == 0 {
@@ -229,7 +234,7 @@ func (m *Model) render() {
 		} else {
 			gutter = m.gutterFg.Render(fmt.Sprintf(" %*d ", gutterW, n))
 		}
-		b.WriteString(gutter + expandTabs(line))
+		b.WriteString(gutter + terminalHyperlinks(expandTabs(line)))
 		if i < len(content)-1 {
 			b.WriteByte('\n')
 		}
